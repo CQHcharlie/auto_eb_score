@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EB Auto Score
 // @namespace    http://tampermonkey.net/
-// @version      3.2.0
+// @version      3.3.0
 // @description  Auto submit score for EB lessons
 // @match        https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/*
 // @grant        none
@@ -238,57 +238,72 @@
             const innerIframe = outerDoc.querySelector('iframe');
             if (!innerIframe) return;
 
-            let doc = null;
+            let found = false;
             for (let i = 0; i < 15; i++) {
                 if (stopRequested) return;
                 try {
-                    doc = innerIframe.contentDocument;
-                    if (doc && doc.body && doc.body.innerText && doc.body.innerText.includes('LEVEL OF DIFFICULTY')) break;
-                    doc = null;
+                    const d = innerIframe.contentDocument;
+                    if (d && d.body && d.body.innerText && d.body.innerText.includes('LEVEL OF DIFFICULTY')) { found = true; break; }
                 } catch (e) {}
                 await waitMs(1000);
             }
-            if (!doc) return;
+            if (!found) return;
 
             log('  Difficulty selection detected, picking Challenging...');
-            const innerWin = innerIframe.contentWindow;
 
-            const challengingEl = findDeepestByText(doc, 'Challenging');
+            const doc1 = innerIframe.contentDocument;
+            const challengingEl = findDeepestByText(doc1, 'Challenging');
             if (challengingEl) {
                 challengingEl.click();
                 log('  Clicked Challenging');
-                await waitMs(500);
             }
+            await waitMs(1000);
 
             let startBtn = null;
             for (let i = 0; i < 10; i++) {
-                startBtn = Array.from(doc.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons') && !b.disabled);
-                if (startBtn) break;
+                if (stopRequested) return;
+                try {
+                    const d = innerIframe.contentDocument;
+                    startBtn = Array.from(d.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons') && !b.disabled);
+                    if (startBtn) break;
+                } catch (e) {}
                 await waitMs(500);
             }
             if (startBtn) {
                 startBtn.click();
                 log('  Clicked Start Lessons');
             } else {
-                log('  Start button not ready, trying force click...');
-                const anyStart = Array.from(doc.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons'));
-                if (anyStart) { anyStart.click(); log('  Force clicked Start'); }
+                log('  Start btn not found, trying XPath...');
+                try {
+                    const d = innerIframe.contentDocument;
+                    const result = d.evaluate('//button-group//button', d, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    const btn = result.singleNodeValue;
+                    if (btn) { btn.click(); log('  Force clicked via XPath'); }
+                } catch (e) {
+                    try {
+                        const d = innerIframe.contentDocument;
+                        const allBtns = d.querySelectorAll('button');
+                        log('  All buttons: ' + Array.from(allBtns).map(b => '"' + b.textContent.trim() + '" disabled=' + b.disabled).join(', '));
+                    } catch (e2) {}
+                }
             }
             await waitMs(3000);
 
-            const doc2 = innerIframe.contentDocument;
-            const win2 = innerIframe.contentWindow;
-            if (doc2 && win2) {
-                const options = findAnswerOptions(doc2, win2);
-                if (options.length > 0) {
-                    options[Math.floor(Math.random() * options.length)].click();
-                    await waitMs(500);
-                    const sub = Array.from(doc2.querySelectorAll('button')).find(b => b.textContent.includes('Submit') && !b.disabled);
-                    if (sub) sub.click();
-                    log('  Answered first question randomly');
-                    await waitMs(500);
+            try {
+                const doc2 = innerIframe.contentDocument;
+                const win2 = innerIframe.contentWindow;
+                if (doc2 && win2) {
+                    const options = findAnswerOptions(doc2, win2);
+                    if (options.length > 0) {
+                        options[Math.floor(Math.random() * options.length)].click();
+                        await waitMs(500);
+                        const sub = Array.from(doc2.querySelectorAll('button')).find(b => b.textContent.includes('Submit') && !b.disabled);
+                        if (sub) sub.click();
+                        log('  Answered first question randomly');
+                        await waitMs(500);
+                    }
                 }
-            }
+            } catch (e) {}
         } catch (e) {
             log('  Difficulty error: ' + e.message);
         }
