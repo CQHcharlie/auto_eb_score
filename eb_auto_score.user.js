@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EB Auto Score
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.0.1
 // @description  Auto submit score for EB lessons
 // @match        https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/*
 // @grant        none
@@ -370,19 +370,12 @@
             overlayPlayer.setAttribute('src', outerSrc);
         }
 
-        log('  Waiting for outer iframe...');
-        await new Promise(r => { overlayPlayer.addEventListener('load', r, { once: true }); setTimeout(r, 30000); });
-        await waitMs(3000);
-
+        log('  Waiting for SCORM API...');
         try {
-            const outerDoc = overlayPlayer.contentDocument;
-            if (outerDoc) {
-                const innerIframe = outerDoc.querySelector('iframe[name="course"]') || outerDoc.querySelector('iframe');
-                if (innerIframe) {
-                    log('  Waiting for course iframe...');
-                    await new Promise(r => { innerIframe.addEventListener('load', r, { once: true }); setTimeout(r, 30000); });
-                    await waitMs(3000);
-                }
+            const outerWin = overlayPlayer.contentWindow;
+            for (let i = 0; i < 30; i++) {
+                if (outerWin && outerWin.API && outerWin.API.isInitialized === 'true') break;
+                await waitMs(1000);
             }
         } catch (e) {
             log('  Iframe access: ' + e.message);
