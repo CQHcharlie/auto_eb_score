@@ -1,16 +1,19 @@
 // ==UserScript==
 // @name         EB Auto Score
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      3.0
 // @description  Auto submit score for EB lessons
 // @match        https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/*
 // @grant        none
+// @downloadURL https://github.com/CQHcharlie/auto_eb_score/raw/refs/heads/main/eb_auto_score.user.js
+// @updateURL https://github.com/CQHcharlie/auto_eb_score/raw/refs/heads/main/eb_auto_score.user.js
 // ==/UserScript==
 
 (function () {
     'use strict';
 
     const LIST_URL = 'https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/index.shtml';
+    const STATE_KEY = 'eb_auto_state';
     let panel = null;
     let isMinimized = false;
     let isRunning = false;
@@ -28,6 +31,51 @@
         return new Promise(r => setTimeout(r, ms));
     }
 
+    function loadState() {
+        try {
+            const raw = localStorage.getItem(STATE_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    }
+
+    function saveState(state) {
+        localStorage.setItem(STATE_KEY, JSON.stringify(state));
+    }
+
+    function clearState() {
+        localStorage.removeItem(STATE_KEY);
+    }
+
+    function readUISettings() {
+        const scoreMode = document.querySelector('input[name="eb-score-mode"]:checked').value;
+        return {
+            running: true,
+            scoreMode: scoreMode,
+            scoreFixed: parseInt(document.getElementById('eb-score-fixed').value) || 100,
+            scoreMin: parseInt(document.getElementById('eb-score-min').value) || 85,
+            scoreMax: parseInt(document.getElementById('eb-score-max').value) || 100,
+            delayMin: parseFloat(document.getElementById('eb-delay-min').value) || 1,
+            delayMax: parseFloat(document.getElementById('eb-delay-max').value) || 3
+        };
+    }
+
+    function resolveScore(settings) {
+        if (settings.scoreMode === 'fixed') return settings.scoreFixed;
+        return randInt(Math.min(settings.scoreMin, settings.scoreMax), Math.max(settings.scoreMin, settings.scoreMax));
+    }
+
+    function resolveDelaySec(settings) {
+        const lo = Math.min(settings.delayMin, settings.delayMax);
+        const hi = Math.max(settings.delayMin, settings.delayMax);
+        return Math.round(randFloat(lo, hi) * 60);
+    }
+
+    function formatSeconds(s) {
+        const m = Math.floor(s / 60);
+        const sec = s % 60;
+        return m + 'm ' + sec + 's';
+    }
+
     function log(msg) {
         const el = document.getElementById('eb-log');
         if (el) {
@@ -36,34 +84,6 @@
             el.scrollTop = el.scrollHeight;
         }
         console.log('[EB Auto]', msg);
-    }
-
-    function getScoreMode() {
-        return document.querySelector('input[name="eb-score-mode"]:checked').value;
-    }
-
-    function getTargetScore() {
-        const mode = getScoreMode();
-        if (mode === 'fixed') {
-            return parseInt(document.getElementById('eb-score-fixed').value) || 100;
-        }
-        const min = parseInt(document.getElementById('eb-score-min').value) || 80;
-        const max = parseInt(document.getElementById('eb-score-max').value) || 100;
-        return randInt(Math.min(min, max), Math.max(min, max));
-    }
-
-    function getDelaySeconds() {
-        const min = parseFloat(document.getElementById('eb-delay-min').value) || 1;
-        const max = parseFloat(document.getElementById('eb-delay-max').value) || 3;
-        const lo = Math.min(min, max);
-        const hi = Math.max(min, max);
-        return Math.round(randFloat(lo, hi) * 60);
-    }
-
-    function formatSeconds(s) {
-        const m = Math.floor(s / 60);
-        const sec = s % 60;
-        return m + 'm ' + sec + 's';
     }
 
     function createPanel() {
@@ -116,14 +136,15 @@
             #eb-panel-title { padding:10px 14px; background:#2d2d2d; border-radius:10px 10px 0 0; cursor:move; font-weight:bold; display:flex; justify-content:space-between; align-items:center; font-size:14px; border-bottom:1px solid #444; }
             #eb-panel-title button { background:none; border:none; color:#aaa; font-size:20px; cursor:pointer; padding:0 4px; line-height:1; }
             #eb-panel-title button:hover { color:#fff; }
-            #eb-panel-body { padding:12px; transition:max-height 0.3s ease; overflow:hidden; }
-            #eb-panel-body.collapsed { max-height:0 !important; padding:0 12px !important; overflow:hidden; }
+            #eb-panel-body { padding:12px; overflow:hidden; }
+            #eb-panel-body.collapsed { max-height:0 !important; padding:0 12px !important; }
             .eb-btn { width:100%; padding:9px; border:none; border-radius:5px; cursor:pointer; font-size:13px; color:#fff; margin-bottom:6px; font-weight:bold; transition:opacity 0.2s; }
             .eb-btn:hover { opacity:0.85; }
             .eb-btn:disabled { opacity:0.4; cursor:not-allowed; }
             #eb-btn-one { background:#4CAF50; }
             #eb-btn-all { background:#2196F3; }
             #eb-btn-stop { background:#f44336; }
+            #eb-countdown { background:#2a2a00; border-radius:4px; margin-bottom:4px; }
             #eb-log { max-height:220px; overflow-y:auto; font-size:11px; color:#0f0; background:#111; padding:8px; border-radius:5px; margin-top:6px; white-space:pre-wrap; word-break:break-all; font-family:Consolas,monospace; }
             #eb-log:empty::before { content:'Ready.'; color:#888; }
             fieldset { border-color:#444 !important; }
@@ -133,11 +154,32 @@
         document.body.appendChild(panel);
 
         makeDraggable(panel, document.getElementById('eb-panel-title'));
-
         document.getElementById('eb-btn-toggle').addEventListener('click', togglePanel);
         document.getElementById('eb-btn-one').addEventListener('click', handleScoreCurrent);
         document.getElementById('eb-btn-all').addEventListener('click', handleScoreAll);
-        document.getElementById('eb-btn-stop').addEventListener('click', () => { stopRequested = true; log('Stop requested...'); });
+        document.getElementById('eb-btn-stop').addEventListener('click', () => {
+            stopRequested = true;
+            clearState();
+            log('Stop requested.');
+            setRunning(false);
+        });
+
+        const saved = loadState();
+        if (saved && saved.running) {
+            log('Resuming auto session...');
+            applySettingsToUI(saved);
+            setTimeout(() => autoLoop(saved), 1500);
+        }
+    }
+
+    function applySettingsToUI(s) {
+        const modeRadio = document.querySelector('input[name="eb-score-mode"][value="' + s.scoreMode + '"]');
+        if (modeRadio) modeRadio.checked = true;
+        document.getElementById('eb-score-fixed').value = s.scoreFixed || 100;
+        document.getElementById('eb-score-min').value = s.scoreMin || 85;
+        document.getElementById('eb-score-max').value = s.scoreMax || 100;
+        document.getElementById('eb-delay-min').value = s.delayMin || 1;
+        document.getElementById('eb-delay-max').value = s.delayMax || 3;
     }
 
     function togglePanel() {
@@ -209,11 +251,11 @@
     async function initAndCommitAPI(outerIframe, score) {
         const outerWin = outerIframe.contentWindow;
         if (!outerWin.API) {
-            log('  API not found, waiting...');
-            await waitMs(2000);
+            log('  Waiting for API...');
+            await waitMs(3000);
         }
         if (!outerWin.API) {
-            log('  ERROR: API still not available');
+            log('  ERROR: API not available');
             return false;
         }
         const api = outerWin.API;
@@ -239,7 +281,7 @@
             setRunning(false);
             return;
         }
-        const score = getTargetScore();
+        const score = resolveScore(readUISettings());
         log('Target score: ' + score);
         const result = await initAndCommitAPI(overlayPlayer, score);
         if (result) {
@@ -253,65 +295,13 @@
         }
     }
 
-    async function handleScoreAll() {
+    function handleScoreAll() {
         if (isRunning) return;
-        setRunning(true);
-        stopRequested = false;
+        const settings = readUISettings();
+        saveState(settings);
         log('=== Score All Incomplete ===');
-
-        if (window.location.href.indexOf('index.shtml') === -1 &&
-            window.location.href.indexOf('goLessonListWithLevelId') === -1 &&
-            window.location.href.indexOf('select_lesson/') === -1) {
-            log('Navigating to lesson list...');
-            window.location.href = LIST_URL;
-            return;
-        }
-
-        let round = 0;
-        while (!stopRequested) {
-            round++;
-            log('--- Round ' + round + ' ---');
-            await waitMs(2000);
-
-            const task = pickRandomIncomplete();
-            if (!task) {
-                log('No more incomplete/new tasks! All done.');
-                break;
-            }
-
-            log('Selected: ' + task.name + ' [' + task.status + ']');
-
-            if (stopRequested) break;
-
-            const isNew = task.status.toLowerCase() === 'new';
-            const delaySec = getDelaySeconds();
-            const extraSec = isNew ? 10 : 0;
-            const totalWait = extraSec + delaySec;
-
-            if (isNew) {
-                log('New task, extra 10s wait...');
-                await waitMs(10000);
-                if (stopRequested) break;
-            }
-
-            log('Random delay: ' + formatSeconds(totalWait));
-            await showCountdown(totalWait);
-            if (stopRequested) break;
-
-            const score = getTargetScore();
-            log('Opening lesson...');
-            const result = await openAndScore(task.id, score);
-            if (result) {
-                log('SUCCESS! Score: ' + score);
-            } else {
-                log('FAILED, trying next...');
-            }
-        }
-
-        log('Finished. Reloading...');
-        setRunning(false);
-        await waitMs(2000);
-        window.location.reload();
+        log('Settings saved. Navigating to list...');
+        window.location.href = LIST_URL;
     }
 
     function pickRandomIncomplete() {
@@ -336,61 +326,123 @@
         return tasks[randInt(0, tasks.length - 1)];
     }
 
-    async function openAndScore(lessonId, score) {
-        const outerSrc = 'selectLesson.do?id=' + encodeURIComponent(lessonId) + '&from=lesson';
-
-        let overlayContainer = document.querySelector('.overlay-container');
-        let overlayPlayer = document.querySelector('.overlay-player');
-        const layout = document.querySelector('.layout') || document.body.firstElementChild;
-
-        if (!overlayContainer) {
-            overlayContainer = document.createElement('div');
-            overlayContainer.className = 'overlay-container';
-            overlayContainer.style.display = 'none';
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'overlay-close';
-            closeBtn.setAttribute('role', 'button');
-            closeBtn.innerHTML = '<i class="wmi">close</i>';
-            overlayContainer.appendChild(closeBtn);
-            document.body.appendChild(overlayContainer);
+    async function clickOpenLesson(lessonId) {
+        const link = document.querySelector('a.popup[data-id="' + lessonId + '"]');
+        if (link) {
+            log('  Clicking link to open lesson...');
+            link.click();
+        } else {
+            log('  Link not found, opening via iframe...');
         }
 
-        if (overlayPlayer) overlayPlayer.remove();
-        overlayPlayer = document.createElement('iframe');
-        overlayPlayer.className = 'overlay-player';
-        overlayContainer.appendChild(overlayPlayer);
+        await waitMs(2000);
 
-        document.body.classList.add('overlay-body');
-        if (layout) layout.style.display = 'none';
-        overlayContainer.style.display = '';
+        let overlayPlayer = document.querySelector('.overlay-player');
+        let attempts = 0;
+        while (!overlayPlayer && attempts < 20) {
+            await waitMs(500);
+            overlayPlayer = document.querySelector('.overlay-player');
+            attempts++;
+        }
 
-        overlayPlayer.setAttribute('src', outerSrc);
+        if (!overlayPlayer) {
+            log('  Overlay not appeared, creating manually...');
+            const outerSrc = 'selectLesson.do?id=' + encodeURIComponent(lessonId) + '&from=lesson';
+            let overlayContainer = document.querySelector('.overlay-container');
+            const layout = document.querySelector('.layout') || document.body.firstElementChild;
+            if (!overlayContainer) {
+                overlayContainer = document.createElement('div');
+                overlayContainer.className = 'overlay-container';
+                overlayContainer.style.display = 'none';
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'overlay-close';
+                closeBtn.setAttribute('role', 'button');
+                closeBtn.innerHTML = '<i class="wmi">close</i>';
+                overlayContainer.appendChild(closeBtn);
+                document.body.appendChild(overlayContainer);
+            }
+            overlayPlayer = document.createElement('iframe');
+            overlayPlayer.className = 'overlay-player';
+            overlayContainer.appendChild(overlayPlayer);
+            document.body.classList.add('overlay-body');
+            if (layout) layout.style.display = 'none';
+            overlayContainer.style.display = '';
+            overlayPlayer.setAttribute('src', outerSrc);
+        }
 
-        log('  Loading outer iframe...');
-        await new Promise(r => { overlayPlayer.addEventListener('load', r, { once: true }); });
-        await waitMs(4000);
+        log('  Waiting for outer iframe...');
+        await new Promise(r => { overlayPlayer.addEventListener('load', r, { once: true }); setTimeout(r, 30000); });
+        await waitMs(3000);
 
         try {
             const outerDoc = overlayPlayer.contentDocument;
-            const innerIframe = outerDoc.querySelector('iframe[name="course"]') || outerDoc.querySelector('iframe');
-            if (innerIframe) {
-                log('  Loading course...');
-                await new Promise(r => { innerIframe.addEventListener('load', r, { once: true }); setTimeout(r, 20000); });
-                await waitMs(3000);
+            if (outerDoc) {
+                const innerIframe = outerDoc.querySelector('iframe[name="course"]') || outerDoc.querySelector('iframe');
+                if (innerIframe) {
+                    log('  Waiting for course iframe...');
+                    await new Promise(r => { innerIframe.addEventListener('load', r, { once: true }); setTimeout(r, 30000); });
+                    await waitMs(3000);
+                }
             }
         } catch (e) {
             log('  Iframe access: ' + e.message);
         }
 
-        log('  Committing score...');
+        return overlayPlayer;
+    }
+
+    async function autoLoop(settings) {
+        setRunning(true);
+        stopRequested = false;
+
+        const task = pickRandomIncomplete();
+        if (!task) {
+            log('No more incomplete/new tasks! All done.');
+            clearState();
+            setRunning(false);
+            return;
+        }
+
+        log('Selected: ' + task.name + ' [' + task.status + ']');
+
+        const isNew = task.status.toLowerCase() === 'new';
+
+        log('Opening lesson...');
+        const overlayPlayer = await clickOpenLesson(task.id);
+        if (!overlayPlayer) {
+            log('Failed to open lesson, retrying next round...');
+            await waitMs(3000);
+            window.location.href = LIST_URL;
+            return;
+        }
+
+        if (stopRequested) { clearState(); setRunning(false); return; }
+
+        let totalWait = resolveDelaySec(settings);
+        if (isNew) {
+            log('New task, adding 10s extra...');
+            totalWait += 10;
+        }
+
+        log('Waiting ' + formatSeconds(totalWait) + ' before scoring...');
+        await showCountdown(totalWait);
+
+        if (stopRequested) { clearState(); setRunning(false); return; }
+
+        const score = resolveScore(settings);
+        log('Scoring: ' + score);
         const result = await initAndCommitAPI(overlayPlayer, score);
 
-        overlayPlayer.remove();
-        if (layout) layout.style.display = '';
-        overlayContainer.style.display = 'none';
-        document.body.classList.remove('overlay-body');
+        if (result) {
+            log('SUCCESS! Score: ' + score);
+        } else {
+            log('FAILED!');
+        }
 
-        return result;
+        log('Refreshing in 3s...');
+        await waitMs(3000);
+        saveState(settings);
+        window.location.href = LIST_URL;
     }
 
     if (document.readyState === 'loading') {
