@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EB Auto Score
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.2.0
 // @description  Auto submit score for EB lessons
 // @match        https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/*
 // @grant        none
@@ -100,7 +100,7 @@
         panel.innerHTML = `
             <div id="eb-panel-inner">
                 <div id="eb-panel-title">
-                    <span>EB Auto Score v3.1</span>
+                    <span>EB Auto Score v3.2</span>
                     <button id="eb-btn-toggle" title="Minimize">&#x2212;</button>
                 </div>
                 <div id="eb-panel-body">
@@ -256,13 +256,23 @@
             const challengingEl = findDeepestByText(doc, 'Challenging');
             if (challengingEl) {
                 challengingEl.click();
+                log('  Clicked Challenging');
                 await waitMs(500);
             }
 
-            const startBtn = Array.from(doc.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons') && !b.disabled);
+            let startBtn = null;
+            for (let i = 0; i < 10; i++) {
+                startBtn = Array.from(doc.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons') && !b.disabled);
+                if (startBtn) break;
+                await waitMs(500);
+            }
             if (startBtn) {
                 startBtn.click();
-                log('  Started Challenging mode');
+                log('  Clicked Start Lessons');
+            } else {
+                log('  Start button not ready, trying force click...');
+                const anyStart = Array.from(doc.querySelectorAll('button')).find(b => b.textContent.includes('Start Lessons'));
+                if (anyStart) { anyStart.click(); log('  Force clicked Start'); }
             }
             await waitMs(3000);
 
