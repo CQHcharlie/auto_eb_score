@@ -12,6 +12,7 @@
 
     const LIST_URL = 'https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/index.shtml';
     const STATE_KEY = 'eb_auto_state';
+    const CONFIG_KEY = 'eb_auto_config';
     let panel = null;
     let isMinimized = false;
     let isRunning = false;
@@ -20,6 +21,7 @@
     function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
     function randFloat(a, b) { return Math.random() * (b - a) + a; }
     function waitMs(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function numVal(id, fallback) { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? fallback : v; }
 
     function formatSeconds(s) {
         if (s <= 0) return '0s';
@@ -32,23 +34,22 @@
     function saveState(s) { localStorage.setItem(STATE_KEY, JSON.stringify(s)); }
     function clearState() { localStorage.removeItem(STATE_KEY); }
 
-    function log(msg) {
-        const el = document.getElementById('eb-log');
-        if (el) {
-            el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
-            el.scrollTop = el.scrollHeight;
-        }
-        console.log('[EB Auto]', msg);
+    function loadConfig() { try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch (e) { return {}; } }
+    function persistConfig() {
+        const cfg = readUIConfig();
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
     }
 
-    function readUISettings() {
+    function readUIConfig() {
         return {
             scoreMode: document.querySelector('input[name="eb-score-mode"]:checked').value,
-            scoreFixed: parseInt(document.getElementById('eb-score-fixed').value) || 100,
-            scoreMin: parseInt(document.getElementById('eb-score-min').value) || 85,
-            scoreMax: parseInt(document.getElementById('eb-score-max').value) || 100,
-            delayMin: parseFloat(document.getElementById('eb-delay-min').value) || 0,
-            delayMax: parseFloat(document.getElementById('eb-delay-max').value) || 1
+            scoreFixed: numVal('eb-score-fixed', 100),
+            scoreMin: numVal('eb-score-min', 85),
+            scoreMax: numVal('eb-score-max', 100),
+            delayMin: numVal('eb-delay-min', 0),
+            delayMax: numVal('eb-delay-max', 0),
+            filterMode: document.getElementById('eb-filter-mode').value,
+            filterScoreBelow: numVal('eb-filter-score', 100)
         };
     }
 
@@ -58,19 +59,32 @@
     }
 
     function resolveDelaySec(s) {
-        const lo = Math.min(s.delayMin || 0, s.delayMax || 0);
-        const hi = Math.max(s.delayMin || 0, s.delayMax || 0);
+        const lo = Math.min(s.delayMin, s.delayMax);
+        const hi = Math.max(s.delayMin, s.delayMax);
+        if (hi <= 0) return 0;
         return Math.round(randFloat(lo, hi) * 60);
     }
 
-    function applySettingsToUI(s) {
-        const r = document.querySelector('input[name="eb-score-mode"][value="' + s.scoreMode + '"]');
+    function log(msg) {
+        const el = document.getElementById('eb-log');
+        if (el) {
+            el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
+            el.scrollTop = el.scrollHeight;
+        }
+        console.log('[EB Auto]', msg);
+    }
+
+    function applyConfigToUI(c) {
+        if (!c) return;
+        const r = document.querySelector('input[name="eb-score-mode"][value="' + (c.scoreMode || 'fixed') + '"]');
         if (r) r.checked = true;
-        document.getElementById('eb-score-fixed').value = s.scoreFixed || 100;
-        document.getElementById('eb-score-min').value = s.scoreMin || 85;
-        document.getElementById('eb-score-max').value = s.scoreMax || 100;
-        document.getElementById('eb-delay-min').value = s.delayMin != null ? s.delayMin : 0;
-        document.getElementById('eb-delay-max').value = s.delayMax != null ? s.delayMax : 1;
+        if (c.scoreFixed != null) document.getElementById('eb-score-fixed').value = c.scoreFixed;
+        if (c.scoreMin != null) document.getElementById('eb-score-min').value = c.scoreMin;
+        if (c.scoreMax != null) document.getElementById('eb-score-max').value = c.scoreMax;
+        if (c.delayMin != null) document.getElementById('eb-delay-min').value = c.delayMin;
+        if (c.delayMax != null) document.getElementById('eb-delay-max').value = c.delayMax;
+        if (c.filterMode) document.getElementById('eb-filter-mode').value = c.filterMode;
+        if (c.filterScoreBelow != null) document.getElementById('eb-filter-score').value = c.filterScoreBelow;
     }
 
     function setRunning(v) {
@@ -100,7 +114,7 @@
         panel.innerHTML = `
             <div id="eb-panel-inner">
                 <div id="eb-panel-title">
-                    <span>EB Auto Score v3.2</span>
+                    <span>EB Auto Score v3.3</span>
                     <button id="eb-btn-toggle" title="Minimize">&#x2212;</button>
                 </div>
                 <div id="eb-panel-body">
@@ -115,14 +129,25 @@
                         <input id="eb-score-max" type="number" value="100" min="0" max="100"/>
                     </fieldset>
                     <fieldset>
-                        <legend>Random Delay (minutes, allow 0 / decimal)</legend>
+                        <legend>Delay (minutes, 0 = instant)</legend>
                         <label>Min:</label>
-                        <input id="eb-delay-min" type="number" value="0.5" min="0" step="0.1"/>
+                        <input id="eb-delay-min" type="number" value="0" min="0" step="0.1"/>
                         <label>Max:</label>
-                        <input id="eb-delay-max" type="number" value="2" min="0" step="0.1"/>
+                        <input id="eb-delay-max" type="number" value="0" min="0" step="0.1"/>
                     </fieldset>
-                    <button id="eb-btn-one" class="eb-btn">Score Current Lesson</button>
-                    <button id="eb-btn-all" class="eb-btn eb-btn-blue">Score All Incomplete</button>
+                    <fieldset>
+                        <legend>Task Filter</legend>
+                        <select id="eb-filter-mode">
+                            <option value="incomplete">Incomplete / New only</option>
+                            <option value="score_below">Score below threshold</option>
+                        </select>
+                        <span id="eb-filter-score-wrap" style="display:none;">
+                            &lt;
+                            <input id="eb-filter-score" type="number" value="100" min="0" max="100"/>
+                        </span>
+                    </fieldset>
+                    <button id="eb-btn-one" class="eb-btn eb-btn-green">Score Current Lesson</button>
+                    <button id="eb-btn-all" class="eb-btn eb-btn-blue">Score All Matching</button>
                     <button id="eb-btn-stop" class="eb-btn eb-btn-red" style="display:none;">Stop</button>
                     <div id="eb-countdown"></div>
                     <div id="eb-log"></div>
@@ -143,12 +168,13 @@
             fieldset *{vertical-align:middle}
             fieldset input[type=number]{width:50px;padding:2px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:13px}
             fieldset label{font-size:13px}
+            fieldset select{padding:3px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:13px;width:100%;margin-bottom:4px}
             .eb-btn{width:100%;padding:9px;border:none;border-radius:5px;cursor:pointer;font-size:13px;color:#fff;margin-bottom:6px;font-weight:bold;transition:opacity .2s}
             .eb-btn:hover{opacity:.85}
             .eb-btn:disabled{opacity:.4;cursor:not-allowed}
-            #eb-btn-one{background:#4CAF50}
-            #eb-btn-all{background:#2196F3}
-            #eb-btn-stop{background:#f44336}
+            .eb-btn-green{background:#4CAF50}
+            .eb-btn-blue{background:#2196F3}
+            .eb-btn-red{background:#f44336}
             #eb-countdown{display:none;text-align:center;font-size:14px;color:#ff0;padding:5px 0;background:#2a2a00;border-radius:4px;margin-bottom:4px}
             #eb-log{max-height:220px;overflow-y:auto;font-size:11px;color:#0f0;background:#111;padding:8px;border-radius:5px;margin-top:6px;white-space:pre-wrap;word-break:break-all;font-family:Consolas,monospace}
             #eb-log:empty::before{content:'Ready.';color:#888}
@@ -156,6 +182,7 @@
         document.head.appendChild(style);
         document.body.appendChild(panel);
 
+        // Drag
         const title = document.getElementById('eb-panel-title');
         let sx, sy, sl, st;
         title.addEventListener('mousedown', e => {
@@ -170,15 +197,30 @@
             document.addEventListener('mouseup', up);
         });
 
+        // Toggle
         document.getElementById('eb-btn-toggle').addEventListener('click', () => {
             const body = document.getElementById('eb-panel-body');
             const btn = document.getElementById('eb-btn-toggle');
             isMinimized = !isMinimized;
             body.classList.toggle('collapsed', isMinimized);
             btn.innerHTML = isMinimized ? '&#x2b;' : '&#x2212;';
-            btn.title = isMinimized ? 'Expand' : 'Minimize';
         });
 
+        // Filter mode toggle
+        document.getElementById('eb-filter-mode').addEventListener('change', () => {
+            document.getElementById('eb-filter-score-wrap').style.display =
+                document.getElementById('eb-filter-mode').value === 'score_below' ? 'inline' : 'none';
+            persistConfig();
+        });
+
+        // Auto-save config on any change
+        const configInputs = panel.querySelectorAll('input, select');
+        configInputs.forEach(el => {
+            el.addEventListener('input', persistConfig);
+            el.addEventListener('change', persistConfig);
+        });
+
+        // Buttons
         document.getElementById('eb-btn-one').addEventListener('click', handleScoreCurrent);
         document.getElementById('eb-btn-all').addEventListener('click', handleScoreAll);
         document.getElementById('eb-btn-stop').addEventListener('click', () => {
@@ -188,11 +230,23 @@
             setRunning(false);
         });
 
-        const saved = loadState();
-        if (saved && saved.running) {
-            applySettingsToUI(saved.settings);
+        // Load saved config
+        const savedCfg = loadConfig();
+        if (Object.keys(savedCfg).length > 0) {
+            applyConfigToUI(savedCfg);
+            // trigger filter display
+            document.getElementById('eb-filter-score-wrap').style.display =
+                savedCfg.filterMode === 'score_below' ? 'inline' : 'none';
+        }
+
+        // Resume running state
+        const runState = loadState();
+        if (runState && runState.running) {
+            applyConfigToUI(runState.settings);
+            document.getElementById('eb-filter-score-wrap').style.display =
+                (runState.settings && runState.settings.filterMode === 'score_below') ? 'inline' : 'none';
             log('Resuming...');
-            setTimeout(() => resume(saved), 1500);
+            setTimeout(() => resume(runState), 1500);
         }
     }
 
@@ -249,7 +303,7 @@
             }
             if (!found) return;
 
-            log('  Difficulty selection detected, picking Challenging...');
+            log('  Difficulty detected, picking Challenging...');
 
             const doc1 = innerIframe.contentDocument;
             const challengingEl = findDeepestByText(doc1, 'Challenging');
@@ -273,19 +327,13 @@
                 startBtn.click();
                 log('  Clicked Start Lessons');
             } else {
-                log('  Start btn not found, trying XPath...');
+                log('  Start btn fallback: XPath...');
                 try {
                     const d = innerIframe.contentDocument;
                     const result = d.evaluate('//button-group//button', d, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
                     const btn = result.singleNodeValue;
-                    if (btn) { btn.click(); log('  Force clicked via XPath'); }
-                } catch (e) {
-                    try {
-                        const d = innerIframe.contentDocument;
-                        const allBtns = d.querySelectorAll('button');
-                        log('  All buttons: ' + Array.from(allBtns).map(b => '"' + b.textContent.trim() + '" disabled=' + b.disabled).join(', '));
-                    } catch (e2) {}
-                }
+                    if (btn) { btn.click(); log('  Clicked via XPath'); }
+                } catch (e) {}
             }
             await waitMs(3000);
 
@@ -299,7 +347,7 @@
                         await waitMs(500);
                         const sub = Array.from(doc2.querySelectorAll('button')).find(b => b.textContent.includes('Submit') && !b.disabled);
                         if (sub) sub.click();
-                        log('  Answered first question randomly');
+                        log('  Answered Q1 randomly');
                         await waitMs(500);
                     }
                 }
@@ -369,7 +417,7 @@
             xhr.open('POST', commitUrl, false);
             xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
             xhr.send(payload);
-            log('  POST ' + commitUrl + ' -> HTTP ' + xhr.status);
+            log('  POST -> HTTP ' + xhr.status);
             if (xhr.status !== 200) return false;
         } catch (e) {
             log('  XHR error: ' + e.message);
@@ -382,19 +430,36 @@
 
     // ---- Task scanning ----
 
-    function pickRandomIncomplete() {
+    function pickRandomTask(settings) {
         const tasks = [];
         document.querySelectorAll('table tbody tr').forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 4) return;
+            if (cells.length < 5) return;
             const link = cells[2] && cells[2].querySelector('a.popup[data-id]');
-            const status = cells[3] ? cells[3].textContent.trim() : '';
-            const lower = status.toLowerCase();
-            if (link && (lower === 'incomplete' || lower === 'new')) {
+            if (!link) return;
+            const status = cells[3] ? cells[3].textContent.trim().toLowerCase() : '';
+            const scoreText = cells[4] ? cells[4].textContent.trim() : '-';
+            const scoreNum = parseInt(scoreText);
+
+            let match = false;
+            if (settings.filterMode === 'score_below') {
+                if (status === 'new' || status === 'incomplete') {
+                    match = true;
+                } else if (!isNaN(scoreNum) && scoreNum < settings.filterScoreBelow) {
+                    match = true;
+                }
+            } else {
+                if (status === 'incomplete' || status === 'new') {
+                    match = true;
+                }
+            }
+
+            if (match) {
                 tasks.push({
                     id: link.dataset.id,
                     name: cells[2].textContent.trim().replace(/\s+/g, ' ').substring(0, 70),
-                    status: status
+                    status: cells[3].textContent.trim(),
+                    score: scoreText
                 });
             }
         });
@@ -405,7 +470,7 @@
 
     async function doPhaseEnter(state) {
         setRunning(true);
-        log('=== ENTER (first visit): ' + (state.lessonName || state.lessonId) + ' ===');
+        log('=== ENTER: ' + (state.lessonName || state.lessonId) + ' ===');
 
         const overlay = await clickOpenLesson(state.lessonId);
         if (!overlay) {
@@ -416,20 +481,21 @@
 
         await handleDifficultySelection(overlay);
 
-        log('  First visit done, waiting 3s...');
+        log('  First visit done, 3s...');
         await waitMs(3000);
 
         if (stopRequested) { clearState(); setRunning(false); return; }
 
         state.phase = 'score';
+        state.settings = readUIConfig();
         saveState(state);
-        log('  Refreshing to list...');
+        log('  Refreshing...');
         window.location.href = LIST_URL;
     }
 
     async function doPhaseScore(state) {
         setRunning(true);
-        log('=== SCORE (second visit): ' + (state.lessonName || state.lessonId) + ' ===');
+        log('=== SCORE: ' + (state.lessonName || state.lessonId) + ' ===');
 
         const overlay = await clickOpenLesson(state.lessonId);
         if (!overlay) {
@@ -440,7 +506,8 @@
 
         if (stopRequested) { clearState(); setRunning(false); return; }
 
-        const delaySec = resolveDelaySec(state.settings);
+        const cfg = readUIConfig();
+        const delaySec = resolveDelaySec(cfg);
         if (delaySec > 0) {
             log('  Delay: ' + formatSeconds(delaySec));
             await showCountdown(delaySec);
@@ -448,12 +515,12 @@
 
         if (stopRequested) { clearState(); setRunning(false); return; }
 
-        const score = resolveScore(state.settings);
+        const score = resolveScore(cfg);
         log('  Committing score: ' + score);
         const ok = await initAndCommitAPI(overlay, score);
         log(ok ? '  SUCCESS!' : '  FAILED!');
 
-        log('  Waiting 3s...');
+        log('  3s...');
         await waitMs(3000);
 
         await finishAndNext(state);
@@ -464,16 +531,17 @@
 
         if (state.mode === 'all') {
             state.phase = 'enter';
-            delete state.lessonId;
-            delete state.lessonName;
-            delete state.lessonStatus;
+            state.lessonId = null;
+            state.lessonName = null;
+            state.lessonStatus = null;
+            state.settings = readUIConfig();
             saveState(state);
-            log('  Next lesson...');
+            log('  Next...');
             window.location.href = LIST_URL;
         } else {
             clearState();
             setRunning(false);
-            log('  Done. Refreshing...');
+            log('  Done.');
             window.location.href = LIST_URL;
         }
     }
@@ -493,15 +561,15 @@
         const m = src.match(/id=([^&]+)/);
         if (!m) { log('Cannot detect lesson ID'); return; }
 
-        const settings = readUISettings();
+        const cfg = readUIConfig();
         const lessonId = m[1];
 
         setRunning(true);
-        log('=== CURRENT LESSON: First visit ===');
+        log('=== CURRENT LESSON ===');
 
         await handleDifficultySelection(overlay);
 
-        log('  Waiting 3s (first visit)...');
+        log('  First visit, 3s...');
         await waitMs(3000);
 
         if (stopRequested) { clearState(); setRunning(false); return; }
@@ -513,7 +581,7 @@
             lessonId: lessonId,
             lessonName: '(current)',
             lessonStatus: '',
-            settings: settings
+            settings: cfg
         });
         log('  Refreshing...');
         window.location.href = LIST_URL;
@@ -521,7 +589,7 @@
 
     function handleScoreAll() {
         if (isRunning) return;
-        const settings = readUISettings();
+        const cfg = readUIConfig();
         saveState({
             running: true,
             mode: 'all',
@@ -529,9 +597,9 @@
             lessonId: null,
             lessonName: null,
             lessonStatus: null,
-            settings: settings
+            settings: cfg
         });
-        log('Starting auto-score-all...');
+        log('Starting batch...');
         window.location.href = LIST_URL;
     }
 
@@ -542,9 +610,10 @@
 
         if (state.phase === 'enter') {
             if (!state.lessonId) {
-                const task = pickRandomIncomplete();
+                const cfg = readUIConfig();
+                const task = pickRandomTask(cfg);
                 if (!task) {
-                    log('All tasks completed!');
+                    log('No matching tasks! Done.');
                     clearState();
                     setRunning(false);
                     return;
@@ -552,6 +621,7 @@
                 state.lessonId = task.id;
                 state.lessonName = task.name;
                 state.lessonStatus = task.status;
+                log('Found: ' + task.name + ' [' + task.status + '] score=' + task.score);
             }
             await doPhaseEnter(state);
         } else if (state.phase === 'score') {
