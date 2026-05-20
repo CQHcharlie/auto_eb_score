@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EB Auto Score
 // @namespace    http://tampermonkey.net/
-// @version      3.3.0
+// @version      3.3.1
 // @description  Auto submit score for EB lessons
 // @match        https://lms1.wiseman.com.hk/lms/user/secure/course/eb/select_lesson/*
 // @grant        none
